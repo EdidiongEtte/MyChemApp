@@ -1,44 +1,52 @@
 workflows:
-  android-workflow:
-    name: Android Workflow
-    max_build_duration: 60
-    instance_type: mac_mini
+  ios-workflow:
+    name: ios_workflow
     environment:
       groups:
-        - keystore_credentials # Comment this out if you are using code-signing-identities <-- Includes - CM_KEYSTORE, CM_KEYSTORE_PASSWORD, CM_KEY_PASSWORD, CM_KEY_ALIAS
-        - google_play # <-- Includes - GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-        - other
-      # Add the group environment variables in Codemagic UI (either in Application/Team variables) - https://docs.codemagic.io/variables/environment-variable-groups/
-      node: latest
+        - app_store_credentials # <-- (Includes APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER, APP_STORE_CONNECT_PRIVATE_KEY, CERTIFICATE_PRIVATE_KEY)
+        - ios_config # <-- (Includes APP_STORE_APP_ID)
+       # Add the group environment variables in Codemagic UI (either in Application/Team variables) - https://docs.codemagic.io/variables/environment-variable-groups/
+      vars:
+        XCODE_WORKSPACE: "YOUR_WORKSPACE_NAME.xcworkspace"  # PUT YOUR WORKSPACE NAME HERE
+        XCODE_SCHEME: "YOUR_SCHEME_NAME" # PUT THE NAME OF YOUR SCHEME HERE
+      xcode: latest
+      cocoapods: default
     triggering:
       events:
         - push
-        - tag
-        - pull_request
       branch_patterns:
-        - pattern: release
+        - pattern: master
           include: true
           source: true
     scripts:
-      - name: Set up local properties
-        script: echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
-      - name: Set up key.properties file for code signing
+      - name: Set up keychain to be used for code signing using Codemagic CLI 'keychain' command
         script: |
-          echo $CM_KEYSTORE | base64 --decode > $CM_KEYSTORE_PATH
-          cat >> "$CM_BUILD_DIR/key.properties" <<EOF
-          storePassword=$CM_KEYSTORE_PASSWORD
-          keyPassword=$CM_KEY_PASSWORD
-          keyAlias=$CM_KEY_ALIAS
-          storeFile=$CM_KEYSTORE_PATH
-          EOF          
-      - name: Build Android app
-        script: 
-          ./gradlew bundleRelease  # To generate an .apk use--> ./gradlew assembleRelease
+                    keychain initialize
+      - name: Fetch signing files
+        script: |
+                    app-store-connect fetch-signing-files $(xcode-project detect-bundle-id) --type IOS_APP_STORE --create
+      - name: Add certificates to keychain
+        script: |
+                    keychain add-certificates 
+      - name: Increment build number
+        script: agvtool new-version -all $(($BUILD_NUMBER +1))
+      - name: Set up code signing settings on Xcode project
+        script: xcode-project use-profiles
+      - name: Build ipa for distribution
+        script: xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
     artifacts:
-      - app/build/outputs/**/**/*.aab
-      - app/build/outputs/**/**/*.apk
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
-      google_play:
-        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-        track: internal
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY      # Contents of the API key
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER    # Alphanumeric value that identifies the API key
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID      # Alphanumeric value that identifies who created the API key
+        submit_to_testflight: false        # Optional boolean, defaults to false. Whether or not to submit the uploaded build to TestFlight to automatically enroll your build to beta testers.
+      # beta_groups:                                  # Specify the names of beta tester groups that will get access to the build once it has passed beta review. 
+      #     - group name 1
+      #     - group name 2
+ 
+
 
